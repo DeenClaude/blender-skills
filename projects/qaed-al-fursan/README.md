@@ -44,7 +44,7 @@ ffmpeg -framerate 24 -i render/frames_final/f_%04d.png -c:v libx264 -pix_fmt yuv
 blender -b -P qaed_al_fursan.py -- --quality preview --still 24 170 352
 ```
 
-Other options: `--frames A-B` (render part of the timeline), `--out DIR`, `--no-save`.
+Other options: `--frames A-B` (render part of the timeline), `--samples N`, `--no-mblur`, `--out DIR`, `--no-save`.
 
 Without Blender installed, `pip install bpy` (the official Blender-as-a-Python-module wheel) works the same way: `python qaed_al_fursan.py -- --quality preview --render`.
 
@@ -98,7 +98,12 @@ No photo of the actual bottle was supplied, only the storyboard. So the label is
 
 The wearer in shot 09 is a procedural stand-in (thobe, ghutra, agal). For a photoreal person, import a scanned or MPFB human and parent it to `Man_Root`. The camera, light and timing are already set.
 
-## Render times (4-core CPU, Cycles)
+## Render times (4-core CPU, Cycles, measured)
 
-- Preview 360 × 640: about 7–9 s per frame, roughly 50 min for all 384 frames.
-- Final 1080 × 1920 at 64 samples with adaptive sampling and OpenImageDenoise: much longer on CPU. A GPU (OptiX/HIP/Metal) is strongly recommended. Set the device in Preferences, or change `c.device = "GPU"` in `configure_render`.
+| Setting | Per frame | 384 frames |
+|---|---|---|
+| Preview 360×640, 12 samples | ~11 s | ~70 min |
+| Final 1080×1920, 64 samples + motion blur | ~4.4 min | ~28 h |
+| Final 1080×1920, `--samples 20 --no-mblur` (used for the delivered MP4) | ~80 s | ~8.5 h |
+
+With OpenImageDenoise, 20 samples is visually indistinguishable from 64 on these shots. On a GPU (OptiX/HIP/Metal), use the full default settings: set `c.device = "GPU"` in `configure_render` and enable the GPU in Preferences.
