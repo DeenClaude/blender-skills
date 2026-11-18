@@ -79,7 +79,8 @@ The hero bottle exists once (in the studio). The bottles on the desert rock are 
 
 - **Bottle:** a beveled rectangular block of black lacquered glass (clear coat, smudge-modulated roughness), a gold collar, a lathed cap with seven horizontal grooves, and a gold atomizer under the cap. The label is a UV-mapped plane driven by `label_mask.png`: a gold metal/black lacquer mix with embossed bump. Built at 10× real scale (1 BU = 1 cm), 85 × 38 × 90 body.
 - **Desert:** a 1.4 km numpy heightfield of sharp-crested dunes, flattened around the action area. Sand uses noise colour, wind-ripple wave bump and fine grain. A homogeneous volume gives aerial haze and god rays. The sky is a custom gradient with a sun disc and halo matched to the sun lamp.
-- **Horse:** an FK armature with metaball muscle volumes parented to the bones. The gallop cycle is procedural (per-leg phase offsets, knee and hock flexion, body pitch, head nod, tail).
+- **Horse, shot 02:** your reference image (`assets/reference/horse_plate.png`) on an unlit card, filmed as a 2.5D plate. A slow push-in pans toward the head, 3D golden dust flies in front, and shallow depth of field turns the near dust into bokeh. Use `--horse-3d` to film the procedural horse instead.
+- **Horse, procedural (shot 09, and shot 02 with `--horse-3d`):** an FK armature with metaball muscle volumes, mane, forelock and tail strands with a wind ripple, and a procedural gallop cycle.
 - **Arabic typography:** Blender text objects cannot join Arabic letters. `make_assets.py` shapes قائد الفرسان with HarfBuzz using the Amiri font and stores the outlines. The script builds them as real extruded and beveled 3D curves, so the lettering is correctly joined.
 - **Studio:** a black acrylic floor, black marble plinth with gold rim, large key softbox, front strip, low bounce card, twin golden rim strips, a back glow card and a smoke volume. Light levels are keyed per shot.
 
@@ -87,9 +88,9 @@ The hero bottle exists once (in the studio). The bottles on the desert rock are 
 
 The script checks for missing textures, a camera marker on every shot, timeline coverage of 1–384 with no gaps, a 9:16 aspect ratio, fps and frame range, bottle proportions, and fonts missing (falling back to Blender's built-in font). The result is printed as `[QAF] validation: OK`.
 
-## Swapping in the real product artwork
+## Product artwork
 
-No photo of the actual bottle was supplied, only the storyboard. So the label is a faithful stand-in in the storyboard's style (interlocking gold bands, horse emblem, Arabic and Latin name), not a copy of the original print. To use the real label:
+The bottle proportions and the label come from the supplied product photo (`assets/reference/bottle_photo.jpg`). `make_assets.py` crops the label to `label_photo.png` and builds the box front, `box_photo.png`. The older procedural label (`label_mask.png`) is only a fallback for when the photo is missing. To use a sharper scan of the label:
 
 1. Scan or photograph the front label straight-on and crop it square.
 2. Convert it to a mask: gold foil = white, black lacquer = black. Save it as `assets/label_mask.png`, ideally 2048 px or larger.
