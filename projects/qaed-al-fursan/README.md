@@ -38,7 +38,7 @@ blender -b -P qaed_al_fursan.py -- --quality final --render
 
 # Resumable PNG sequence (safe to stop and restart; finished frames are skipped)
 blender -b -P qaed_al_fursan.py -- --quality final --png --render
-ffmpeg -framerate 24 -i render/frames_final/f_%04d.png -c:v libx264 -pix_fmt yuv420p -crf 16 render/qaed_al_fursan_final.mp4
+python3 finish_edit.py render/frames_final render/qaed_al_fursan_final.mp4   # dissolves + encode
 
 # Single test frames
 blender -b -P qaed_al_fursan.py -- --quality preview --still 24 170 352
@@ -67,7 +67,7 @@ To open the project interactively, open `qaed_al_fursan.blend`. Shot cameras are
 | 11 | 14–15s | 337–360 | 3D gold قائد الفرسان / QAED AL FURSAN / EAU DE PARFUM | Static, rising type + glint sweep |
 | 12 | 15–16s | 361–384 | Bottle + box end pack on the rock | Gentle push, 45 mm |
 
-Transitions: hard cuts on the beat, with exposure dips to black into shots 04, 07, 09 and 11, and a fade in from black at the start.
+Transitions: a fade in from black at the start. `finish_edit.py` then adds a soft 8-frame dissolve (blended in linear light) at every shot change, keeping the film at exactly 384 frames. Camera moves are constant-speed, so motion flows across the cuts.
 
 ## Collections
 

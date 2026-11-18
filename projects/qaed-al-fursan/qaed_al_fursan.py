@@ -1532,7 +1532,7 @@ def particle_system(emitter, name, inst, count, start, end, life, emit_from="VOL
 CAMS = {}
 
 
-def make_cam(shot, lens, keys, fstop=None, interp="BEZIER"):
+def make_cam(shot, lens, keys, fstop=None, interp="LINEAR"):
     """keys: list of (frame, cam_location, target_location)."""
     cd = bpy.data.cameras.new(f"CAM_{shot:02d}")
     cd.lens = lens
@@ -1723,7 +1723,7 @@ def build(scene, quality):
     key(front_l, "energy", s4 + 12, 0, "BEZIER"); key(front_l, "energy", e4, 350, "CONSTANT")
     # sweep: emblem macro (03) and cap macro (06)
     s3, e3 = SHOTS[3]
-    key(sweep_l, "energy", s3, 600, "CONSTANT")
+    key(sweep_l, "energy", s3, 220, "CONSTANT")
     key(sweep_o, "location", s3, S + Vector((-1.4, -1.0, 1.1)), "BEZIER")
     key(sweep_o, "location", e3, S + Vector((1.4, -1.0, 1.1)), "BEZIER")
     key(sweep_l, "energy", e3 + 1, 0, "CONSTANT")
@@ -1954,11 +1954,7 @@ def build(scene, quality):
     vs = scene.view_settings
     key(vs, "exposure", 1, -7.0, "BEZIER")
     key(vs, "exposure", 12, 0.0, "BEZIER")
-    for cut in (SHOTS[4][0], SHOTS[7][0], SHOTS[9][0], SHOTS[11][0]):
-        key(vs, "exposure", cut - 5, 0.0, "BEZIER")
-        key(vs, "exposure", cut - 1, -5.0, "CONSTANT")
-        key(vs, "exposure", cut, -5.0, "BEZIER")
-        key(vs, "exposure", cut + 6, 0.0, "BEZIER")
+    # shot-to-shot dissolves are done in finish_edit.py on the rendered frames
     key(vs, "exposure", FRAME_END, 0.0, "BEZIER")
 
     # ANIMATION collection: keep shot markers / helper empties here
