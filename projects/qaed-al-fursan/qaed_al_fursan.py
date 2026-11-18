@@ -73,11 +73,14 @@ INGRED = Vector((5100.0, 0.0, 0.0))      # ingredients table
 PLINTH_H = 0.12
 BOTTLE_BASE = STUDIO + Vector((0, 0, PLINTH_H))
 
-# Product dimensions (built at 10x real scale: 1 BU = 1 cm)
-BODY_W, BODY_D, BODY_H = 0.85, 0.38, 0.90
-CAP_R, CAP_H = 0.17, 0.38
+# Product dimensions, measured from assets/reference/bottle_photo.jpg
+# (1 px = 0.9/1024 BU; built at 10x real scale, 1 BU = 1 cm)
+BODY_W, BODY_D, BODY_H = 0.90, 0.40, 0.90     # square front face
+CAP_R, CAP_H = 0.161, 0.336                    # cap 0.357 x body width, 0.37 x body height
+RING_H = 0.035                                 # thin gold ring between body and cap
+LABEL_S = 0.69                                 # label = 0.77 x body width, centred
 NECK_Z = BODY_H
-CAP_Z0 = BODY_H + 0.055
+CAP_Z0 = BODY_H + RING_H
 
 # Sun: low, in +Y (cameras of desert shots look toward +Y = backlight)
 SUN_ELEV = math.radians(4.0)
@@ -433,22 +436,81 @@ def lathe(name, profile, coll, segments=96, smooth=True):
     return mesh_from_bm(name, bm, coll, smooth)
 
 
+def mat_photo_label(name, image_name):
+    """Label material driven by the photographed artwork: photo colour as
+    albedo; bright foil (gold / silver lines) becomes metal, dark areas
+    stay glossy black lacquer; luminance gives the embossed relief."""
+    img = load_image(image_name, "sRGB")
+    if img is None:
+        return None
+    m, nt, out = new_mat(name)
+    tex = nt.nodes.new("ShaderNodeTexImage")
+    tex.image = img
+    tex.interpolation = "Cubic"
+    uv = nt.nodes.new("ShaderNodeTexCoord")
+    nt.links.new(uv.outputs["UV"], tex.inputs["Vector"])
+    p = principled(nt, rough=0.22, aniso=0.2)
+    bw = nt.nodes.new("ShaderNodeRGBToBW")
+    nt.links.new(tex.outputs["Color"], bw.inputs[0])
+    metal = nt.nodes.new("ShaderNodeMapRange")
+    metal.inputs["From Min"].default_value = 0.08
+    metal.inputs["From Max"].default_value = 0.22
+    nt.links.new(bw.outputs[0], metal.inputs["Value"])
+    nt.links.new(metal.outputs["Result"], p.inputs["Metallic"])
+    boost = nt.nodes.new("ShaderNodeMix")
+    boost.data_type = "RGBA"
+    boost.blend_type = "MULTIPLY"
+    boost.clamp_result = False
+    boost.inputs["Factor"].default_value = 1.0
+    boost.inputs["B"].default_value = (1.45, 1.4, 1.3, 1)
+    nt.links.new(tex.outputs["Color"], boost.inputs["A"])
+    nt.links.new(boost.outputs["Result"], p.inputs["Base Color"])
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.35
+    bump.inputs["Distance"].default_value = 0.002
+    nt.links.new(bw.outputs[0], bump.inputs["Height"])
+    nt.links.new(bump.outputs["Normal"], p.inputs["Normal"])
+    nt.links.new(p.outputs[0], out.inputs[0])
+    return m
+
+
+def rounded_rect_curve(name, w, h, r, coll, bevel):
+    """Closed rounded rectangle in the XZ plane, as a beveled curve."""
+    cu = bpy.data.curves.new(name, "CURVE")
+    cu.dimensions = "3D"
+    cu.bevel_depth = bevel
+    cu.bevel_resolution = 3
+    sp = cu.splines.new("POLY")
+    pts = []
+    for cx, cz, a0 in ((w / 2 - r, h / 2 - r, 0), (-w / 2 + r, h / 2 - r, 90),
+                       (-w / 2 + r, -h / 2 + r, 180), (w / 2 - r, -h / 2 + r, 270)):
+        for i in range(9):
+            a = math.radians(a0 + 90 * i / 8)
+            pts.append((cx + r * math.cos(a), 0, cz + r * math.sin(a)))
+    sp.points.add(len(pts) - 1)
+    for i, q in enumerate(pts):
+        sp.points[i].co = (*q, 1)
+    sp.use_cyclic_u = True
+    return new_obj(name, cu, coll)
+
+
 def build_bottle():
+    """Qaed Al Fursan bottle, proportions measured from the product photo."""
     root = empty("Bottle_Root", BOTTLE_BASE, "PRODUCT", 0.3)
     m_glass = mat_black_glass()
     m_gold = mat_gold()
-    m_cap = mat_simple("M_CapBlack", base=(0.004, 0.004, 0.004, 1), rough=0.18,
-                       coat=1.0, coat_rough=0.05)
+    m_cap = mat_simple("M_CapBlack", base=(0.004, 0.004, 0.004, 1), rough=0.08,
+                       coat=1.0, coat_rough=0.02)
 
-    # --- body: rounded rectangular block of black glass
+    # --- body: square-fronted block of thick black glass, soft rounded edges
     bm = bmesh.new()
     bmesh.ops.create_cube(bm, size=1.0)
     bmesh.ops.scale(bm, vec=(BODY_W, BODY_D, BODY_H), verts=bm.verts)
     bmesh.ops.translate(bm, vec=(0, 0, BODY_H / 2), verts=bm.verts)
     body = mesh_from_bm("Bottle_Body", bm, "PRODUCT", smooth=False)
     bev = body.modifiers.new("Bevel", "BEVEL")
-    bev.width = 0.045
-    bev.segments = 6
+    bev.width = 0.06
+    bev.segments = 8
     bev.limit_method = "ANGLE"
     bev.harden_normals = True
     body.modifiers.new("WeightedNormal", "WEIGHTED_NORMAL")
@@ -456,71 +518,67 @@ def build_bottle():
     for p in body.data.polygons:
         p.use_smooth = True
 
-    # --- inner front panel: slightly recessed glass frame around the label
-    bm = bmesh.new()
-    bmesh.ops.create_cube(bm, size=1.0)
-    bmesh.ops.scale(bm, vec=(0.70, 0.01, 0.70), verts=bm.verts)
-    bmesh.ops.translate(bm, vec=(0, -BODY_D / 2 - 0.002, 0.45), verts=bm.verts)
-    frame = mesh_from_bm("Bottle_LabelFrame", bm, "LABEL", smooth=False)
-    fb = frame.modifiers.new("Bevel", "BEVEL"); fb.width = 0.004; fb.segments = 2
-    frame.data.materials.append(m_gold)
+    zc = BODY_H / 2
+    yf = -BODY_D / 2
+    # --- glass ridge framing the front face (the moulded inner border in the photo)
+    ridge = rounded_rect_curve("Bottle_FrontRidge", BODY_W - 0.08, BODY_H - 0.08, 0.05, "PRODUCT", 0.004)
+    ridge.location = (0, yf - 0.001, zc)
+    ridge.data.materials.append(m_glass)
 
-    # --- label plane (UV-mapped mask texture)
+    # --- label plane: the photographed artwork
     bm = bmesh.new()
-    s = 0.66
+    s = LABEL_S
     v = [bm.verts.new(p) for p in ((-s / 2, 0, -s / 2), (s / 2, 0, -s / 2),
                                    (s / 2, 0, s / 2), (-s / 2, 0, s / 2))]
     f = bm.faces.new(v)
     uvl = bm.loops.layers.uv.new("UVMap")
     for loop, uvc in zip(f.loops, ((0, 0), (1, 0), (1, 1), (0, 1))):
         loop[uvl].uv = uvc
-    bmesh.ops.translate(bm, vec=(0, -BODY_D / 2 - 0.0085, 0.45), verts=bm.verts)
+    bmesh.ops.translate(bm, vec=(0, yf - 0.0015, zc), verts=bm.verts)
     bmesh.ops.reverse_faces(bm, faces=bm.faces)
     label = mesh_from_bm("Bottle_Label", bm, "LABEL", smooth=False)
-    label.data.materials.append(mat_label("M_Label", "label_mask.png"))
+    lm = mat_photo_label("M_Label", "label_photo.png") or mat_label("M_Label", "label_mask.png")
+    label.data.materials.append(lm)
 
-    # --- neck + gold collar
-    neck = lathe("Bottle_Neck", [(0.0, NECK_Z - 0.01), (0.11, NECK_Z - 0.01),
-                                  (0.11, CAP_Z0 + 0.02), (0.0, CAP_Z0 + 0.02)], "PRODUCT", 48)
+    # --- neck (hidden) + thin gold ring under the cap
+    neck = lathe("Bottle_Neck", [(0.0, NECK_Z - 0.01), (0.10, NECK_Z - 0.01),
+                                  (0.10, CAP_Z0 + 0.02), (0.0, CAP_Z0 + 0.02)], "PRODUCT", 48)
     neck.data.materials.append(m_glass)
-    collar = lathe("Bottle_GoldCollar", [(0.0, NECK_Z), (0.172, NECK_Z), (0.178, NECK_Z + 0.012),
-                                          (0.178, CAP_Z0 - 0.004), (0.17, CAP_Z0), (0.0, CAP_Z0)],
-                   "PRODUCT", 96)
+    collar = lathe("Bottle_GoldCollar", [(0.0, NECK_Z), (CAP_R * 0.95, NECK_Z),
+                                          (CAP_R * 0.97, NECK_Z + 0.006), (CAP_R * 0.97, CAP_Z0 - 0.004),
+                                          (CAP_R * 0.95, CAP_Z0), (0.0, CAP_Z0)], "PRODUCT", 96)
     collar.data.materials.append(m_gold)
 
     # --- atomizer (visible when the cap is off in the spray shot)
-    atom = lathe("Bottle_Atomizer", [(0.0, CAP_Z0), (0.10, CAP_Z0), (0.10, CAP_Z0 + 0.07),
-                                     (0.085, CAP_Z0 + 0.08), (0.06, CAP_Z0 + 0.08),
-                                     (0.06, CAP_Z0 + 0.17), (0.055, CAP_Z0 + 0.18), (0.0, CAP_Z0 + 0.18)],
+    atom = lathe("Bottle_Atomizer", [(0.0, CAP_Z0), (0.095, CAP_Z0), (0.095, CAP_Z0 + 0.07),
+                                     (0.08, CAP_Z0 + 0.08), (0.055, CAP_Z0 + 0.08),
+                                     (0.055, CAP_Z0 + 0.17), (0.05, CAP_Z0 + 0.18), (0.0, CAP_Z0 + 0.18)],
                  "PRODUCT", 64)
     atom.data.materials.append(m_gold)
     nozzle = lathe("Bottle_Nozzle", [(0.0, -0.004), (0.012, -0.004), (0.012, 0.004), (0.0, 0.004)],
                    "PRODUCT", 24)
     nozzle.rotation_euler = (0, math.radians(90), 0)
-    nozzle.location = (-0.058, 0, CAP_Z0 + 0.145)
+    nozzle.location = (-0.053, 0, CAP_Z0 + 0.145)
     nozzle.data.materials.append(mat_simple("M_NozzleHole", base=(0.0, 0.0, 0.0, 1), rough=0.6))
 
-    # --- ribbed cap: stacked horizontal grooves (lathe profile)
-    prof = [(0.0, CAP_Z0)]
-    rings = 7
-    hband = (CAP_H - 0.04) / rings
-    z = CAP_Z0
-    prof.append((CAP_R - 0.006, z))
-    prof.append((CAP_R, z + 0.006))
-    for i in range(rings):
-        z0 = CAP_Z0 + i * hband
-        prof += [(CAP_R, z0 + 0.008), (CAP_R, z0 + hband - 0.010),
-                 (CAP_R - 0.008, z0 + hband - 0.004), (CAP_R - 0.008, z0 + hband)]
+    # --- cap: smooth glossy cylinder in 4 bands split by 3 fine grooves
+    #     (groove heights read off the photo: 24%, 52%, 77% down from the top)
     ztop = CAP_Z0 + CAP_H
-    prof += [(CAP_R, ztop - 0.03), (CAP_R - 0.012, ztop - 0.004), (CAP_R - 0.03, ztop), (0.0, ztop)]
+    prof = [(0.0, CAP_Z0), (CAP_R - 0.004, CAP_Z0), (CAP_R, CAP_Z0 + 0.004), (CAP_R, CAP_Z0 + 0.012)]
+    for frac in (0.77, 0.52, 0.24):
+        zg = ztop - frac * CAP_H
+        prof += [(CAP_R, zg - 0.010), (CAP_R, zg - 0.003), (CAP_R - 0.0015, zg - 0.001),
+                 (CAP_R - 0.0015, zg + 0.001), (CAP_R, zg + 0.003), (CAP_R, zg + 0.010)]
+    prof += [(CAP_R, ztop - 0.026), (CAP_R, ztop - 0.018), (CAP_R - 0.004, ztop - 0.005),
+             (CAP_R - 0.016, ztop), (CAP_R - 0.03, ztop), (0.0, ztop)]
     cap = lathe("Bottle_Cap", prof, "PRODUCT", 128)
     cap.data.materials.append(m_cap)
-    capring = lathe("Bottle_CapGoldRing", [(0.0, CAP_Z0 - 0.002), (CAP_R + 0.004, CAP_Z0 - 0.002),
-                                            (CAP_R + 0.004, CAP_Z0 + 0.012), (0.0, CAP_Z0 + 0.012)],
+    capring = lathe("Bottle_CapGoldRing", [(0.0, CAP_Z0 - 0.001), (CAP_R * 0.975, CAP_Z0 - 0.001),
+                                            (CAP_R * 0.975, CAP_Z0 + 0.003), (0.0, CAP_Z0 + 0.003)],
                     "PRODUCT", 128)
     capring.data.materials.append(m_gold)
 
-    for o in (body, frame, label, neck, collar, atom, nozzle, cap, capring):
+    for o in (body, ridge, label, neck, collar, atom, nozzle, cap, capring):
         o.parent = root
     root.location = BOTTLE_BASE
     COLL["PRODUCT"].instance_offset = BOTTLE_BASE
@@ -561,7 +619,8 @@ def build_box(loc, rot_z):
     bmesh.ops.translate(bm, vec=(0, -D / 2 - 0.0015, 0), verts=bm.verts)
     bmesh.ops.reverse_faces(bm, faces=bm.faces)
     face = mesh_from_bm("Box_Front", bm, "BRAND_ELEMENTS", smooth=False)
-    face.data.materials.append(mat_label("M_BoxFront", "box_mask.png", 4.0))
+    face.data.materials.append(mat_photo_label("M_BoxFront", "box_photo.png")
+                               or mat_label("M_BoxFront", "box_mask.png", 4.0))
     face.parent = box
     box.location = loc
     box.rotation_euler = (0, 0, rot_z)
@@ -584,7 +643,8 @@ def dune_height(x, y):
     d = np.sqrt((x / 50.0) ** 2 + (y / 45.0) ** 2)
     m = np.clip((d - 0.55) / 0.9, 0, 1)
     m = m * m * (3 - 2 * m)
-    return h * (0.18 + 0.82 * m) + 0.4 * np.sin(x * 0.11 + y * 0.07)
+    crest = 2.4 * np.exp(-((y - 12.0) / 5.5) ** 2) * np.exp(-((x + 3.0) / 30.0) ** 2)
+    return h * (0.18 + 0.82 * m) + 0.4 * np.sin(x * 0.11 + y * 0.07) + crest
 
 
 def build_desert():
@@ -618,7 +678,7 @@ def build_desert():
     fog = mesh_from_bm("Desert_Haze", bm, "ENVIRONMENT", smooth=False)
     m, nt, out = new_mat("M_DesertHaze")
     pv = nt.nodes.new("ShaderNodeVolumePrincipled")
-    pv.inputs["Color"].default_value = (1.0, 0.85, 0.68, 1)
+    pv.inputs["Color"].default_value = (1.0, 0.72, 0.42, 1)
     pv.inputs["Density"].default_value = 0.00035
     pv.inputs["Anisotropy"].default_value = 0.65
     nt.links.new(pv.outputs[0], out.inputs["Volume"])
@@ -720,7 +780,7 @@ def build_world(scene):
     sunc.inputs["Factor"].default_value = 1.0
     sunmul = nt.nodes.new("ShaderNodeMix"); sunmul.data_type = "RGBA"; sunmul.blend_type = "MULTIPLY"
     sunmul.inputs["Factor"].default_value = 1.0
-    sunmul.inputs["B"].default_value = (1.0, 0.62, 0.28, 1)
+    sunmul.inputs["B"].default_value = (1.0, 0.55, 0.18, 1)
     nt.links.new(s2.outputs[0], sunmul.inputs["A"])
     nt.links.new(ramp.outputs["Color"], sunc.inputs["A"])
     nt.links.new(sunmul.outputs["Result"], sunc.inputs["B"])
@@ -743,6 +803,7 @@ def build_world(scene):
 # Horse (procedural skin-modifier body on an FK armature)
 # ---------------------------------------------------------------------------
 HORSE_BONES = {}
+EMBLEM_MODE = False
 
 # Rest skeleton (horse faces +X, metres, ~1.6 m at the withers)
 HORSE_J = {
@@ -800,31 +861,30 @@ def build_horse(coll="ENVIRONMENT"):
     # metaball volumes in world rest space: (p0, p1, radius)
     V = lambda *c: Vector(c)
     vol = {
-        "body": [(V(-0.55, 0, 1.44), V(0.28, 0, 1.40), 0.27), (V(-0.30, 0, 1.25), V(0.22, 0, 1.22), 0.22),
-                 (V(0.36, 0, 1.30), None, 0.25), (V(-0.60, 0, 1.42), None, 0.27),
-                 (V(0.42, 0, 1.52), V(0.10, 0, 1.56), 0.12)],
-        "neck": [(V(0.50, 0, 1.45), None, 0.21), (V(0.56, 0, 1.56), V(0.86, 0, 2.00), 0.135),
-                 (V(0.45, 0, 1.70), V(0.80, 0, 2.12), 0.06)],
+        "body": [(V(-0.55, 0, 1.42), V(0.28, 0, 1.38), 0.31), (V(-0.30, 0, 1.22), V(0.22, 0, 1.18), 0.26),
+                 (V(0.36, 0, 1.28), None, 0.29), (V(-0.60, 0, 1.40), None, 0.31),
+                 (V(0.42, 0, 1.52), V(0.10, 0, 1.56), 0.13)],
+        "neck": [(V(0.50, 0, 1.45), None, 0.24), (V(0.56, 0, 1.56), V(0.86, 0, 2.00), 0.15),
+                 (V(0.45, 0, 1.70), V(0.80, 0, 2.12), 0.07)],
         "head": [(V(0.93, 0, 2.05), V(1.22, 0, 1.79), 0.095), (V(0.98, 0, 1.95), None, 0.115),
                  (V(1.24, 0, 1.76), None, 0.085), (V(0.88, 0.055, 2.12), V(0.87, 0.06, 2.27), 0.03),
                  (V(0.88, -0.055, 2.12), V(0.87, -0.06, 2.27), 0.03)],
-        "tail": [(V(-0.78, 0, 1.48), V(-1.02, 0, 1.36), 0.06), (V(-1.02, 0, 1.36), V(-1.25, 0, 1.08), 0.075),
-                 (V(-1.25, 0, 1.08), V(-1.36, 0, 0.78), 0.055)],
+        "tail": [(V(-0.78, 0, 1.48), V(-0.95, 0, 1.40), 0.06)],
     }
     for s in "LR":
         P = legs[s]
-        vol["fu" + s] = [(P["sh"], P["el"], 0.13)]
+        vol["fu" + s] = [(P["sh"], P["el"], 0.15)]
         vol["ff" + s] = [(P["el"], P["kn"], 0.085), (P["kn"], None, 0.065)]
         vol["fc" + s] = [(P["kn"], P["ff"], 0.058)]
         vol["fp" + s] = [(P["ff"], P["fh"], 0.05), (P["fh"] + Vector((0.01, 0, 0.01)), None, 0.075)]
-        vol["hu" + s] = [(P["hp"], P["st"], 0.17)]
+        vol["hu" + s] = [(P["hp"], P["st"], 0.2)]
         vol["hf" + s] = [(P["st"], P["ho"], 0.10), (P["ho"], None, 0.07)]
         vol["hc" + s] = [(P["ho"], P["hf"], 0.06)]
         vol["hpn" + s] = [(P["hf"], P["hh"], 0.05), (P["hh"] + Vector((0.01, 0, 0.01)), None, 0.075)]
 
     m, nt, out = new_mat("M_HorseCoat")
-    p = principled(nt, base=(0.045, 0.022, 0.012, 1), rough=0.38, sheen=0.6, coat=0.25,
-                   coat_rough=0.3)
+    p = principled(nt, base=(0.028, 0.013, 0.007, 1), rough=0.45, sheen=0.7, coat=0.1,
+                   coat_rough=0.35)
     nt.links.new(p.outputs[0], out.inputs[0])
     K = 1.45  # metaball radius -> visible surface
     base = None
@@ -857,7 +917,98 @@ def build_horse(coll="ENVIRONMENT"):
         o.matrix_parent_inverse = rest.inverted()
     HORSE_BONES["rig"] = rig
     HORSE_BONES["base"] = base
+    if not EMBLEM_MODE:
+        build_horse_hair(rig, coll)
     return rig, base
+
+
+def hair_strands(name, strands, mat, rig, bone, coll, radius=0.012, wave=None):
+    """Tapered tube strands (world rest coords) bone-parented to the rig, with
+    an optional animated Wave modifier (roots pinned via a weight group)."""
+    bm = bmesh.new()
+    wl = bm.verts.layers.deform.verify()
+    sides = 5
+    for pts in strands:
+        rings = []
+        n = len(pts)
+        for i, p in enumerate(pts):
+            t = i / (n - 1)
+            d = (pts[min(i + 1, n - 1)] - pts[max(i - 1, 0)]).normalized()
+            a = d.orthogonal().normalized()
+            b = d.cross(a).normalized()
+            r = radius * (1.0 - 0.85 * t)
+            ring = []
+            for k in range(sides):
+                ang = 2 * math.pi * k / sides
+                v = bm.verts.new(p + (a * math.cos(ang) + b * math.sin(ang)) * r)
+                v[wl][0] = t ** 1.5
+                ring.append(v)
+            rings.append(ring)
+        for i in range(n - 1):
+            for k in range(sides):
+                bm.faces.new((rings[i][k], rings[i][(k + 1) % sides], rings[i + 1][(k + 1) % sides],
+                              rings[i + 1][k]))
+    o = mesh_from_bm(name, bm, coll)
+    o.vertex_groups.new(name="flow")
+    o.data.materials.append(mat)
+    if wave:
+        w = o.modifiers.new("Flow", "WAVE")
+        w.use_x, w.use_y = True, False
+        w.use_normal = False
+        w.height, w.width, w.speed = wave
+        w.narrowness = 1.2
+        w.vertex_group = "flow"
+    bn = rig.data.bones[bone]
+    rest = rig.matrix_world @ bn.matrix_local @ Matrix.Translation((0, bn.length, 0))
+    o.parent = rig
+    o.parent_type = "BONE"
+    o.parent_bone = bone
+    o.matrix_parent_inverse = rest.inverted()
+    return o
+
+
+def build_horse_hair(rig, coll="ENVIRONMENT"):
+    rnd = random.Random(21)
+    m, nt, out = new_mat("M_HorseHair")
+    p = principled(nt, base=(0.012, 0.007, 0.005, 1), rough=0.32, sheen=0.8, coat=0.2)
+    nt.links.new(p.outputs[0], out.inputs[0])
+    # mane: strands from the crest of the neck, streaming back in the wind
+    mane = []
+    a, b = Vector((0.88, 0, 2.12)), Vector((0.42, 0, 1.70))
+    for i in range(70):
+        t = rnd.random()
+        root = a.lerp(b, t) + Vector((rnd.uniform(-0.02, 0.02), rnd.uniform(-0.035, 0.035), 0.015))
+        L = rnd.uniform(0.28, 0.48) * (1.0 - 0.3 * t)
+        d = Vector((-1.0, rnd.uniform(-0.25, 0.25), rnd.uniform(0.15, 0.45))).normalized()
+        pts = []
+        for k in range(8):
+            u = k / 7
+            q = root + d * L * u + Vector((0, 0, -0.10 * u * u)) + Vector((0, 0, 0.03 * math.sin(u * 5 + i)))
+            pts.append(q)
+        mane.append(pts)
+    hair_strands("Horse_Mane", mane, m, rig, "neck", coll, 0.014, (0.035, 0.45, 0.05))
+    # forelock
+    fl = []
+    for i in range(10):
+        root = Vector((0.90, rnd.uniform(-0.04, 0.04), 2.18))
+        d = Vector((rnd.uniform(-0.6, -0.2), rnd.uniform(-0.3, 0.3), 0.3)).normalized()
+        fl.append([root + d * 0.16 * k / 5 for k in range(6)])
+    hair_strands("Horse_Forelock", fl, m, rig, "head", coll, 0.01, (0.02, 0.3, 0.06))
+    # tail: long, flowing back and out
+    tail = []
+    root0 = Vector((-0.80, 0, 1.47))
+    for i in range(90):
+        r0 = root0 + Vector((rnd.uniform(-0.05, 0.03), rnd.uniform(-0.05, 0.05), rnd.uniform(-0.06, 0.02)))
+        L = rnd.uniform(0.85, 1.25)
+        sp = rnd.uniform(-0.3, 0.3)
+        pts = []
+        for k in range(10):
+            u = k / 9
+            q = r0 + Vector((-L * u, sp * u * 0.5, -0.55 * u * u * L + 0.08 * u))
+            q += Vector((0, 0, 0.05 * math.sin(u * 6 + i * 0.7)))
+            pts.append(q)
+        tail.append(pts)
+    hair_strands("Horse_Tail", tail, m, rig, "tail", coll, 0.016, (0.06, 0.6, 0.06))
 
 
 def horse_pose(rig, t, gallop=1.0):
@@ -887,7 +1038,7 @@ def horse_pose(rig, t, gallop=1.0):
     P["body"].rotation_euler.z = math.radians(4) * math.sin(cyc(0.2)) * gallop
     P["neck"].rotation_euler.z = (math.radians(7) * math.sin(cyc(0.45)) - math.radians(6)) * gallop
     P["head"].rotation_euler.z = math.radians(8) * math.sin(cyc(0.5)) * gallop
-    P["tail"].rotation_euler.z = -math.radians(28) * gallop + math.radians(8) * math.sin(cyc(0.1)) * gallop
+    P["tail"].rotation_euler.z = -math.radians(18) * gallop + math.radians(7) * math.sin(cyc(0.1)) * gallop
 
 
 def key_horse_pose(rig, frame, interp="LINEAR"):
@@ -1426,7 +1577,8 @@ def build(scene, quality):
     rig.pose.bones["neck"].rotation_euler.z = math.radians(10)
     rig.pose.bones["tail"].rotation_euler.z = math.radians(-6)
     key_horse_pose(rig, s9, "CONSTANT")
-    for o in [o for o in bpy.data.objects if o.name.split(".")[0] == "Horse"]:
+    for o in [o for o in bpy.data.objects if o.name.split(".")[0].startswith("Horse")
+              and o.type in ("META", "MESH")]:
         key_visible(o, (2, 9))
 
     man_root, man_parts = build_man(MAN, math.radians(62))
@@ -1445,7 +1597,7 @@ def build(scene, quality):
 
     # ---------------- LIGHTING ----------------
     sun_d = bpy.data.lights.new("Sun_Golden", "SUN")
-    sun_d.color = (1.0, 0.70, 0.42)
+    sun_d.color = (1.0, 0.58, 0.26)
     sun_d.angle = math.radians(1.2)
     sun = new_obj("Sun_Golden", sun_d, "LIGHTING")
     sun.rotation_euler = (-(math.pi / 2 - SUN_ELEV), 0, 0)
@@ -1510,17 +1662,17 @@ def build(scene, quality):
 
     # studio intensities per shot (constant between shots, ramps inside 04)
     plan = {
-        3: dict(key=250, fill=40, rim=200, top=120, back=500, glow=1.0, front=900),
+        3: dict(key=250, fill=40, rim=200, top=120, back=500, glow=1.0, front=350),
         4: dict(key=0, fill=0, rim=0, top=0, back=1500, glow=2.6, front=0),
-        5: dict(key=800, fill=140, rim=420, top=220, back=900, glow=1.6, front=260),
+        5: dict(key=500, fill=100, rim=420, top=160, back=900, glow=1.6, front=90),
         6: dict(key=500, fill=90, rim=380, top=260, back=700, glow=1.4, front=300),
-        8: dict(key=300, fill=60, rim=300, top=100, back=1800, glow=2.0, front=400),
+        8: dict(key=220, fill=60, rim=300, top=100, back=1800, glow=2.0, front=150),
     }
     for shot in SHOTS:
         s, e = SHOTS[shot]
         p = plan.get(shot, dict(key=0, fill=0, rim=0, top=0, back=0, glow=0, front=0))
         key(front_l, "energy", s, p["front"], "CONSTANT")
-        key(low_l, "energy", s, {5: 450, 8: 250, 6: 120}.get(shot, 0), "CONSTANT")
+        key(low_l, "energy", s, {5: 140, 8: 120, 6: 80}.get(shot, 0), "CONSTANT")
         key(key_l, "energy", s, p["key"], "CONSTANT")
         key(fill_l, "energy", s, p["fill"], "CONSTANT")
         key(rimL, "energy", s, p["rim"], "CONSTANT")
@@ -1556,6 +1708,15 @@ def build(scene, quality):
     io3, il3 = area("Ingr_Fill", I + Vector((1.2, -1.5, 0.6)), (0, 0, 0), 1.0, (1.0, 0.9, 0.8), 40)
     aim(io3, I)
 
+    # warm side fill riding along with the galloping horse (shot 02)
+    hf_o, hf_l = area("Horse_Fill", Vector((0, 0, 0)), (0, 0, 0), 3.0, (1.0, 0.62, 0.3), 0.0)
+    for f, hx in ((s2, x0), (e2, x1)):
+        hp = Vector((hx, path_y, float(dune_height(hx, path_y)) + 1.2))
+        key(hf_o, "location", f, hp + Vector((2.5, -4.0, 2.2)), "LINEAR")
+    hf_o.constraints.new("TRACK_TO").target = rig
+    for shot in SHOTS:
+        key(hf_l, "energy", SHOTS[shot][0], 260 if shot == 2 else 0, "CONSTANT")
+
     # desert fill lights for the product on the rock and the end card
     rk = ROCK + Vector((0, 0, rock_top - ROCK.z + 0.6))
     ro, rl = area("Desert_Rock_Fill", rk + Vector((-1.6, -3.0, 1.4)), (0, 0, 0), 2.0,
@@ -1590,7 +1751,9 @@ def build(scene, quality):
     dust_mat = mat_simple("M_Dust", base=(1.0, 0.75, 0.45, 1), rough=0.6,
                           emit=(1.0, 0.65, 0.3, 1), emit_str=1.5)
     dust_inst = particle_instance("PI_DustMote", 0.012, dust_mat)
-    sand_inst = particle_instance("PI_SandGrain", 0.02, bpy.data.materials["M_Sand"])
+    sand_inst = particle_instance("PI_SandGrain", 0.03,
+                                  mat_simple("M_HoofDust", base=(1.0, 0.7, 0.4, 1), rough=0.8,
+                                             trans=0.6, emit=(1.0, 0.55, 0.22, 1), emit_str=0.8))
     mist_mat = mat_simple("M_MistDroplet", base=(1, 1, 1, 1), rough=0.05, trans=1.0, ior=1.33,
                           emit=(1.0, 0.85, 0.6, 1), emit_str=0.6)
     mist_inst = particle_instance("PI_MistDroplet", 0.0035, mist_mat)
@@ -1609,9 +1772,9 @@ def build(scene, quality):
     # hoof sand kick: emitter rides with the horse
     em_hoof = emitter_box("EM_HoofSand", Vector((0, 0, 0.08)), (1.6, 0.5, 0.1))
     em_hoof.parent = rig
-    particle_system(em_hoof, "Hoof_Sand", sand_inst, int(6000 * n), s2 - 2, e2, 30,
-                    emit_from="VOLUME", normal=0.0, rand=2.2, gravity=1.0, damping=0.05,
-                    size=0.9, size_rand=0.8, obj_vel=-0.15, seed=6)
+    particle_system(em_hoof, "Hoof_Sand", sand_inst, int(14000 * n), s2 - 6, e2, 40,
+                    emit_from="VOLUME", normal=0.0, rand=1.6, gravity=0.35, damping=0.12,
+                    size=1.2, size_rand=0.9, obj_vel=-0.1, brownian=0.4, seed=6)
     hs = em_hoof.particle_systems[0].settings
     hs.object_align_factor = (0, 0, 2.2)
     # studio floating motes
@@ -1671,11 +1834,11 @@ def build(scene, quality):
     for f in (s2, (s2 + e2) // 2, e2):
         u = (f - s2) / (e2 - s2)
         hx = x0 + (x1 - x0) * u
-        cx = hx - 1.5 + 1.0 * u
-        keys.append((f, (cx, 1.0, hz(cx, 1.0, 0.55)), (hx + 0.3, path_y, hz(hx, path_y, 1.3))))
-    make_cam(2, 40, keys, interp="LINEAR")
+        cx = hx + 0.35 - 0.5 * u
+        keys.append((f, (cx, path_y - 6.2, hz(hx, path_y, -0.15)), (hx + 0.2, path_y, hz(hx, path_y, 1.35))))
+    make_cam(2, 35, keys, interp="LINEAR")
     # 03: emblem macro push-in
-    lab = BOTTLE_BASE + Vector((0.08, -BODY_D / 2 - 0.01, 0.45 + 0.66 * 0.13))   # horse emblem centre
+    lab = BOTTLE_BASE + Vector((0.16 * LABEL_S, -BODY_D / 2 - 0.01, BODY_H / 2 + 0.17 * LABEL_S))  # horse emblem
     make_cam(3, 85, [(SHOTS[3][0], lab + Vector((0.35, -1.75, 0.25)), lab + Vector((0.01, 0, -0.02))),
                      (SHOTS[3][1], lab + Vector((0.10, -1.20, 0.10)), lab)], fstop=5.6)
     # 04: silhouette, slow dolly in, front
@@ -1837,7 +2000,8 @@ def validate(scene):
     if scene.frame_end != FRAME_END or r.fps != FPS:
         problems.append("frame range / fps wrong")
     body = bpy.data.objects["Bottle_Body"].dimensions
-    if abs(body.x / body.z - BODY_W / BODY_H) > 0.02:
+    cap = bpy.data.objects["Bottle_Cap"].dimensions
+    if abs(body.x / body.z - 1.0) > 0.02 or abs(cap.x / body.x - 0.357) > 0.02:
         problems.append("bottle proportions drifted")
     for ob in bpy.data.objects:
         if ob.type == "FONT" and ob.data.font and ob.data.font.filepath == "<builtin>":
@@ -1866,6 +2030,8 @@ def bake_particles(scene):
 # Emblem-only mode: renders the horse silhouette used on the label artwork
 # ---------------------------------------------------------------------------
 def render_emblem(scene):
+    global EMBLEM_MODE
+    EMBLEM_MODE = True
     make_collections(scene)
     rig, horse = build_horse()
     horse_pose(rig, 0.30, 1.0)

@@ -137,7 +137,7 @@ def raster_shape(shape, size, box, img=None, fill=255):
         for h in g.interiors:
             d.polygon([(ox + (x - minx) * s, oy + (maxy - y) * s) for x, y in h.coords], fill=0)
     if img is not None:
-        img.paste(fill, mask=mask)
+        img.paste(fill if img.mode != "L" or not isinstance(fill, tuple) else 255, mask=mask)
     return mask
 
 
@@ -249,8 +249,44 @@ def build_box(label, ar_shape):
     print("box_mask.png")
 
 
+LABEL_CROP = (866, 1200, 1652, 1986)   # label square in assets/reference/bottle_photo.jpg
+
+
+def build_photo_label():
+    """Front label cut straight from the supplied product photo (exact artwork)."""
+    p = os.path.join(A, "reference", "bottle_photo.jpg")
+    if not os.path.exists(p):
+        return None
+    lab = Image.open(p).convert("RGB").crop(LABEL_CROP).resize((2048, 2048), Image.LANCZOS)
+    lab.save(os.path.join(A, "label_photo.png"))
+    print("label_photo.png")
+    return lab
+
+
+def build_photo_box(lab, ar_shape):
+    """Retail box front (colour): black board, gold rules, the real label art,
+    Arabic name and category, laid out like the storyboard end pack."""
+    W, H = 1700, 2006
+    gold = (212, 175, 55)
+    img = Image.new("RGB", (W, H), (6, 6, 6))
+    d = ImageDraw.Draw(img)
+    d.rectangle((30, 30, W - 30, H - 30), outline=gold, width=10)
+    img.paste(lab.resize((1300, 1300), Image.LANCZOS), ((W - 1300) // 2, 400))
+    raster_shape(ar_shape, (W, H), (W * 0.25, 110, W * 0.75, 290), img, fill=gold)
+    f = ImageFont.truetype(EN_FONT, 62)
+    for txt, y in (("QAED AL FURSAN", 1780), ("EAU DE PARFUM", 1875)):
+        t = " ".join(txt)
+        w = d.textlength(t, font=f)
+        d.text(((W - w) / 2, y), t, font=f, fill=gold)
+    img.save(os.path.join(A, "box_photo.png"))
+    print("box_photo.png")
+
+
 if __name__ == "__main__":
     shape = shaped_outline(TITLE_AR, AR_FONT)
     arabic_json(shape)
     lab = build_label(shape)
     build_box(lab, shape)
+    photo = build_photo_label()
+    if photo is not None:
+        build_photo_box(photo, shape)
